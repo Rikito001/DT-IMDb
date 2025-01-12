@@ -1,8 +1,7 @@
-CREATE DATABASE dragon_imdb;
-
-CREATE SCHEMA dragon_imdb.staging;
-
-USE dragon_imdb.staging;
+-- DB and schema
+CREATE DATABASE dragon_imdb_rework;
+CREATE SCHEMA dragon_imdb_rework.staging;
+USE SCHEMA dragon_imdb_rework.staging;
 
 -- Staging
 CREATE OR REPLACE TABLE movies_staging (
@@ -51,14 +50,14 @@ CREATE OR REPLACE TABLE role_mapping_staging (
     PRIMARY KEY (movie_id, name_id, category)
 );
 
--- Error handler
+-- Stage for CSV
 CREATE OR REPLACE STAGE dragon_stage
     FILE_FORMAT = (
         TYPE = 'CSV'
         FIELD_OPTIONALLY_ENCLOSED_BY = '"'
         NULL_IF = ('NULL', '')
         EMPTY_FIELD_AS_NULL = TRUE
-    );
+);
 
 -- Data load
 COPY INTO movies_staging
@@ -85,79 +84,82 @@ COPY INTO role_mapping_staging
 FROM @dragon_stage/role_mapping.csv
 FILE_FORMAT = (TYPE = 'CSV' FIELD_OPTIONALLY_ENCLOSED_BY = '"' SKIP_HEADER = 1)
 
--- Transform
-CREATE OR REPLACE TABLE dim_movies AS
+-- dim_movies
+CREATE TABLE dim_movies AS
 SELECT DISTINCT
     m.id AS movie_id,
     m.title,
     m.year,
     m.date_published,
     m.duration,
+    m.country,
     m.worldwide_gross_income,
+    m.languages,
     m.production_company
 FROM movies_staging m;
 
-CREATE OR REPLACE TABLE dim_dates AS
-SELECT DISTINCT
-    ROW_NUMBER() OVER (ORDER BY date_published) AS date_id,
-    date_published,
-    EXTRACT(YEAR FROM date_published) AS year,
-    EXTRACT(MONTH FROM date_published) AS month,
-    EXTRACT(DAY FROM date_published) AS day,
-    DAYNAME(date_published) AS day_name,
-    MONTHNAME(date_published) AS month_name
-FROM movies_staging
-WHERE date_published IS NOT NULL;
-
-CREATE OR REPLACE TABLE dim_directors AS
+-- dim_directors
+CREATE TABLE dim_directors AS
 SELECT DISTINCT
     n.id AS director_id,
-    n.name AS director_name,
+    n.name,
     n.date_of_birth,
     n.height
 FROM names_staging n
 JOIN director_mapping_staging dm ON n.id = dm.name_id;
 
-CREATE OR REPLACE TABLE dim_genres AS
+-- dim_genres
+CREATE TABLE dim_genres AS
 SELECT DISTINCT
-    ROW_NUMBER() OVER (ORDER BY genre) AS genre_id,
-    genre AS genre_name
-FROM genres_staging;
+    ROW_NUMBER() OVER (ORDER BY g.genre) AS genre_id,
+    g.genre
+FROM genres_staging g;
 
-CREATE OR REPLACE TABLE dim_roles AS
+-- dim_roles
+CREATE TABLE dim_roles AS
 SELECT DISTINCT
-    ROW_NUMBER() OVER (ORDER BY n.id, r.category) AS role_id,
-    n.id AS name_id,
+    n.id AS role_id,
+    rm.category AS role_name,
     n.name AS actor_name,
-    r.category AS role_type
+    n.date_of_birth,
+    n.height
 FROM names_staging n
-JOIN role_mapping_staging r ON n.id = r.name_id;
+JOIN role_mapping_staging rm ON n.id = rm.name_id;
 
-CREATE OR REPLACE TABLE fact_ratings AS
-SELECT 
-    r.movie_id,
-    r.avg_rating,
-    r.total_votes,
-    r.median_rating,
-    m.id AS dim_movies_id,
-    d.director_id AS dim_directors_id,
-    g.genre_id AS dim_genres_id,
-    dr.role_id AS dim_roles_id,
-    dt.date_id AS dim_dates_id
+-- dim_date
+CREATE TABLE dim_date AS
+SELECT DISTINCT
+    CAST(date_published AS DATE) AS date_id,
+    DAY(date_published) AS day,
+    MONTH(date_published) AS month,
+    YEAR(date_published) AS year
+FROM movies_staging
+WHERE date_published IS NOT NULL;
+
+-- fact_ratings
+CREATE TABLE fact_ratings AS
+SELECT DISTINCT
+    ROW_NUMBER() OVER (ORDER BY r.movie_id) AS rating_id,
+    r.avg_rating AS rating,
+    dg.genre_id AS dim_genres_genre_id,
+    m.id AS dim_movies_movie_id,
+    d.date_id AS dim_date_date_id,
+    dr.director_id AS dim_directors_director_id,
+    rl.role_id AS dim_roles_role_id
 FROM ratings_staging r
-JOIN movies_staging m ON r.movie_id = m.id
-LEFT JOIN director_mapping_staging dm ON m.id = dm.movie_id
-LEFT JOIN dim_directors d ON dm.name_id = d.director_id
-LEFT JOIN genres_staging gs ON m.id = gs.movie_id
-LEFT JOIN dim_genres g ON gs.genre = g.genre_name
-LEFT JOIN role_mapping_staging rm ON m.id = rm.movie_id
-LEFT JOIN dim_roles dr ON (rm.name_id = dr.name_id AND rm.category = dr.role_type)
-LEFT JOIN dim_dates dt ON m.date_published = dt.date_published;
+LEFT JOIN movies_staging m ON r.movie_id = m.id
+LEFT JOIN genres_staging g ON r.movie_id = g.movie_id
+LEFT JOIN dim_genres dg ON g.genre = dg.genre
+LEFT JOIN dim_date d ON m.date_published = d.date_id
+LEFT JOIN director_mapping_staging dm ON r.movie_id = dm.movie_id
+LEFT JOIN dim_directors dr ON dm.name_id = dr.director_id
+LEFT JOIN role_mapping_staging rm ON r.movie_id = rm.movie_id
+LEFT JOIN dim_roles rl ON rm.name_id = rl.role_id;
 
 -- Staging deletion
+DROP TABLE IF EXISTS names_staging;
 DROP TABLE IF EXISTS movies_staging;
 DROP TABLE IF EXISTS genres_staging;
-DROP TABLE IF EXISTS names_staging;
-DROP TABLE IF EXISTS ratings_staging;
 DROP TABLE IF EXISTS director_mapping_staging;
 DROP TABLE IF EXISTS role_mapping_staging;
+DROP TABLE IF EXISTS ratings_staging;
