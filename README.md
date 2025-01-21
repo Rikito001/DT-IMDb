@@ -141,7 +141,16 @@ FROM movies_staging
 WHERE date_published IS NOT NULL;
 ```
 
-Faktová tabuľka `fact_ratings` spája všetky dimenzie a obsahuje hodnotenia filmov:
+Faktová tabuľka `fact_ratings` obsahuje kľúčové metriky pre analýzu hodnotení filmov:
+
+- **rating_id**: Unikátny identifikátor hodnotenia (surrogate key)
+- **rating**: Priemerné hodnotenie filmu (avg_rating) na škále od 1 do 10
+- **dim_genres_genre_id**: Cudzí kľúč prepájajúci hodnotenie s príslušným žánrom filmu
+- **dim_movies_movie_id**: Cudzí kľúč prepájajúci hodnotenie s konkrétnym filmom
+- **dim_date_date_id**: Cudzí kľúč prepájajúci hodnotenie s dátumom vydania filmu
+- **dim_directors_director_id**: Cudzí kľúč prepájajúci hodnotenie s režisérom filmu
+- **dim_roles_role_id**: Cudzí kľúč prepájajúci hodnotenie s hercami a ich úlohami
+
 ```sql
 CREATE TABLE fact_ratings AS
 SELECT DISTINCT
